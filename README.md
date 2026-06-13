@@ -85,9 +85,13 @@ unplanned-downtime / fault-pareto views.
 
 ## Schema ownership
 
-This service runs **no migrations**. The tables it reads/writes are defined in
-[`deploy/schema.sql`](deploy/schema.sql) for the production/MES owner to fold
-into a domain migration. Requires the TimescaleDB extension on the hypertable.
+This service runs **no migrations**. Its tables are created by **MES** migration
+`006_machine_telemetry.sql` (schema `mes`) as a **parallel subsystem** keyed on
+`machine_id` — intentionally separate from MES's existing `mes_assets` /
+`mes_asset_telemetry_latest` / `mes_downtime_events` (keyed on `asset_tag`),
+**to be reconciled later**. `deploy/schema.sql` mirrors that DDL for reference.
+The service DSN must put `mes` on the `search_path` (see `config/.env.example`).
+Requires the TimescaleDB extension on the hypertable.
 
 ## Monorepo wiring
 
