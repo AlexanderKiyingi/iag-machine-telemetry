@@ -27,7 +27,7 @@ func (b *Broker) Publish(r Reading) {
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	for _, ch := range b.perMachine[r.MachineID] {
+	for _, ch := range b.perMachine[r.AssetTag] {
 		select {
 		case ch <- r:
 		default:
@@ -42,25 +42,25 @@ func (b *Broker) Publish(r Reading) {
 }
 
 // Subscribe returns a channel of readings for one machine and a cancel func.
-func (b *Broker) Subscribe(machineID string) (<-chan Reading, func()) {
+func (b *Broker) Subscribe(assetTag string) (<-chan Reading, func()) {
 	ch := make(chan Reading, 32)
 	b.mu.Lock()
 	id := b.nextID
 	b.nextID++
-	if b.perMachine[machineID] == nil {
-		b.perMachine[machineID] = map[int]chan Reading{}
+	if b.perMachine[assetTag] == nil {
+		b.perMachine[assetTag] = map[int]chan Reading{}
 	}
-	b.perMachine[machineID][id] = ch
+	b.perMachine[assetTag][id] = ch
 	b.mu.Unlock()
 	return ch, func() {
 		b.mu.Lock()
-		if subs := b.perMachine[machineID]; subs != nil {
+		if subs := b.perMachine[assetTag]; subs != nil {
 			if c, ok := subs[id]; ok {
 				delete(subs, id)
 				close(c)
 			}
 			if len(subs) == 0 {
-				delete(b.perMachine, machineID)
+				delete(b.perMachine, assetTag)
 			}
 		}
 		b.mu.Unlock()

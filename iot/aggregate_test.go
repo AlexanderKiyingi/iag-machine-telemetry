@@ -12,12 +12,12 @@ func strp(v string) *string  { return &v }
 // readingsFixture builds a simple day: 60m running, 10m down, then running.
 func readingsFixture(base time.Time) []Reading {
 	return []Reading{
-		{MachineID: "MCH-1", TS: base, State: StateRunning, SpindleRPM: f64(10000), TemperatureC: f64(40), GoodCount: i64(0), RejectCount: i64(0), CycleCount: i64(0)},
-		{MachineID: "MCH-1", TS: base.Add(30 * time.Minute), State: StateRunning, SpindleRPM: f64(12000), TemperatureC: f64(55), GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
-		{MachineID: "MCH-1", TS: base.Add(60 * time.Minute), State: StateDown, FaultCode: strp("F0042"), GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
-		{MachineID: "MCH-1", TS: base.Add(65 * time.Minute), State: StateDown, GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
-		{MachineID: "MCH-1", TS: base.Add(70 * time.Minute), State: StateRunning, SpindleRPM: f64(11000), TemperatureC: f64(50), GoodCount: i64(380), RejectCount: i64(20), CycleCount: i64(400)},
-		{MachineID: "MCH-1", TS: base.Add(100 * time.Minute), State: StateRunning, GoodCount: i64(480), RejectCount: i64(20), CycleCount: i64(500)},
+		{AssetTag: "MCH-1", TS: base, State: StateRunning, SpindleRPM: f64(10000), TemperatureC: f64(40), GoodCount: i64(0), RejectCount: i64(0), CycleCount: i64(0)},
+		{AssetTag: "MCH-1", TS: base.Add(30 * time.Minute), State: StateRunning, SpindleRPM: f64(12000), TemperatureC: f64(55), GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
+		{AssetTag: "MCH-1", TS: base.Add(60 * time.Minute), State: StateDown, FaultCode: strp("F0042"), GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
+		{AssetTag: "MCH-1", TS: base.Add(65 * time.Minute), State: StateDown, GoodCount: i64(280), RejectCount: i64(20), CycleCount: i64(300)},
+		{AssetTag: "MCH-1", TS: base.Add(70 * time.Minute), State: StateRunning, SpindleRPM: f64(11000), TemperatureC: f64(50), GoodCount: i64(380), RejectCount: i64(20), CycleCount: i64(400)},
+		{AssetTag: "MCH-1", TS: base.Add(100 * time.Minute), State: StateRunning, GoodCount: i64(480), RejectCount: i64(20), CycleCount: i64(500)},
 	}
 }
 

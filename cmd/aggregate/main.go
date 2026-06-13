@@ -37,7 +37,7 @@ func main() {
 	from, to := dateWindow()
 	params := iot.AggregateParams{IdealCyclesPerMin: floatEnv("IDEAL_CYCLES_PER_MIN", 0)}
 
-	pairs, err := store.DistinctMachineDays(ctx, from, to)
+	pairs, err := store.DistinctAssetDays(ctx, from, to)
 	if err != nil {
 		slog.Error("distinct machine-days", "err", err)
 		os.Exit(1)
@@ -46,19 +46,19 @@ func main() {
 
 	var rolled, downtimeWritten int
 	for _, md := range pairs {
-		readings, err := store.ReadingsForDay(ctx, md.MachineID, md.Day)
+		readings, err := store.ReadingsForDay(ctx, md.AssetTag, md.Day)
 		if err != nil {
-			slog.Error("load readings", "machineId", md.MachineID, "day", md.Day, "err", err)
+			slog.Error("load readings", "assetTag", md.AssetTag, "day", md.Day, "err", err)
 			continue
 		}
-		res := iot.AggregateDay(md.MachineID, md.Day, readings, params)
+		res := iot.AggregateDay(md.AssetTag, md.Day, readings, params)
 		if err := store.UpsertDaily(ctx, res.Summary); err != nil {
-			slog.Error("upsert daily", "machineId", md.MachineID, "day", md.Day, "err", err)
+			slog.Error("upsert daily", "assetTag", md.AssetTag, "day", md.Day, "err", err)
 			continue
 		}
 		rolled++
 		if n, err := store.InsertDowntimeEvents(ctx, res.DowntimeEvents); err != nil {
-			slog.Warn("insert downtime", "machineId", md.MachineID, "day", md.Day, "err", err)
+			slog.Warn("insert downtime", "assetTag", md.AssetTag, "day", md.Day, "err", err)
 		} else {
 			downtimeWritten += n
 		}

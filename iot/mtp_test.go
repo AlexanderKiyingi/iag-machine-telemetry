@@ -89,7 +89,7 @@ func TestReadMTPPacketRoundTrip(t *testing.T) {
 }
 
 func TestRecordToReadingScaling(t *testing.T) {
-	dev := &Device{ID: 7, MachineID: "MCH-001"}
+	dev := &Device{ID: 7, AssetTag: "MCH-001"}
 	rec := MTPRecord{
 		Timestamp:   time.Unix(1_700_000_000, 0).UTC(),
 		State:       1, // running
@@ -103,7 +103,7 @@ func TestRecordToReadingScaling(t *testing.T) {
 		PowerW:      4200, // 4.2 kW
 	}
 	r := RecordToReading(rec, dev)
-	if r.MachineID != "MCH-001" || r.DeviceID == nil || *r.DeviceID != 7 {
+	if r.AssetTag != "MCH-001" || r.DeviceID == nil || *r.DeviceID != 7 {
 		t.Fatalf("binding wrong: %+v", r)
 	}
 	if r.State != StateRunning {

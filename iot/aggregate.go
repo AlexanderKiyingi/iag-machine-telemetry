@@ -23,9 +23,9 @@ func (p AggregateParams) maxGap() time.Duration {
 
 // AggregateDay rolls a day's readings (sorted ascending by ts) into one OEE
 // summary plus any detected downtime events. Pure: no DB access, fully testable.
-func AggregateDay(machineID string, day time.Time, readings []Reading, p AggregateParams) DailyResult {
+func AggregateDay(assetTag string, day time.Time, readings []Reading, p AggregateParams) DailyResult {
 	day = day.UTC().Truncate(24 * time.Hour)
-	sum := DailySummary{MachineID: machineID, Day: day, ReadingCount: len(readings)}
+	sum := DailySummary{AssetTag: assetTag, Day: day, ReadingCount: len(readings)}
 	if len(readings) == 0 {
 		return DailyResult{Summary: sum}
 	}
@@ -104,11 +104,11 @@ func AggregateDay(machineID string, day time.Time, readings []Reading, p Aggrega
 		sum.OEE = &oee
 	}
 
-	return DailyResult{Summary: sum, DowntimeEvents: detectDowntime(machineID, readings, p.maxGap())}
+	return DailyResult{Summary: sum, DowntimeEvents: detectDowntime(assetTag, readings, p.maxGap())}
 }
 
 // detectDowntime emits one event per contiguous run of "down" readings.
-func detectDowntime(machineID string, readings []Reading, maxGap time.Duration) []DowntimeEvent {
+func detectDowntime(assetTag string, readings []Reading, maxGap time.Duration) []DowntimeEvent {
 	var out []DowntimeEvent
 	i := 0
 	for i < len(readings) {
@@ -138,7 +138,7 @@ func detectDowntime(machineID string, readings []Reading, maxGap time.Duration) 
 		if dur >= 1 {
 			endCopy := end
 			out = append(out, DowntimeEvent{
-				MachineID:   machineID,
+				AssetTag:    assetTag,
 				StartedAt:   start,
 				EndedAt:     &endCopy,
 				DurationMin: dur,

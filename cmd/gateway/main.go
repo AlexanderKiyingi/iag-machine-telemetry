@@ -139,16 +139,16 @@ func (g *tcpGateway) handle(conn net.Conn) {
 			logger.Error("insert readings failed", "err", err)
 			return
 		}
-		if device.MachineID != "" && len(readings) > 0 {
+		if device.AssetTag != "" && len(readings) > 0 {
 			newest := readings[0]
 			for _, rd := range readings[1:] {
 				if rd.TS.After(newest.TS) {
 					newest = rd
 				}
 			}
-			if _, err := g.store.ApplyMachineHotState(ctx, newest); err != nil {
+			if _, err := g.store.ApplyAssetHotState(ctx, newest); err != nil {
 				logger.Warn("registry sync failed after TCP ingest",
-					"machineId", device.MachineID, "err", err)
+					"assetTag", device.AssetTag, "err", err)
 			}
 		}
 		_ = g.store.MarkSeen(ctx, device.ID, ipOnly(remote))

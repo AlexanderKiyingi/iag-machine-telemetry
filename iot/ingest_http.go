@@ -14,7 +14,7 @@ const MaxIngestBatch = 1000
 
 // IngestReadingBody is one HTTP ingest row (machine relay or manual POST).
 type IngestReadingBody struct {
-	MachineID    string          `json:"machineId"`
+	AssetTag     string          `json:"assetTag"`
 	TS           time.Time       `json:"ts"`
 	State        string          `json:"state"`
 	SpindleRPM   *float64        `json:"spindleRpm"`
@@ -63,12 +63,12 @@ func IngestHTTPBatch(ctx context.Context, store *Store, hub *Hub, apiKey string,
 	now := time.Now().UTC()
 	readings := make([]Reading, 0, len(batch))
 	for _, b := range batch {
-		machineID := b.MachineID
-		if machineID == "" {
-			machineID = device.MachineID
+		assetTag := b.AssetTag
+		if assetTag == "" {
+			assetTag = device.AssetTag
 		}
-		if machineID == "" {
-			return IngestBatchResult{}, fmt.Errorf("machineId required (device has no default binding)")
+		if assetTag == "" {
+			return IngestBatchResult{}, fmt.Errorf("assetTag required (device has no default binding)")
 		}
 		ts := b.TS
 		if ts.IsZero() {
@@ -87,7 +87,7 @@ func IngestHTTPBatch(ctx context.Context, store *Store, hub *Hub, apiKey string,
 		}
 		devID := device.ID
 		readings = append(readings, Reading{
-			MachineID: machineID, DeviceID: &devID, TS: ts, State: NormalizeState(b.State),
+			AssetTag: assetTag, DeviceID: &devID, TS: ts, State: NormalizeState(b.State),
 			SpindleRPM: b.SpindleRPM, FeedRate: b.FeedRate, TemperatureC: b.TemperatureC,
 			VibrationMmS: b.VibrationMmS, PressureBar: b.PressureBar, PowerKW: b.PowerKW,
 			GoodCount: b.GoodCount, RejectCount: b.RejectCount, CycleCount: b.CycleCount,
@@ -99,10 +99,10 @@ func IngestHTTPBatch(ctx context.Context, store *Store, hub *Hub, apiKey string,
 		return IngestBatchResult{}, err
 	}
 	result := IngestBatchResult{Accepted: n}
-	if newest := newestReading(readings); newest != nil && newest.MachineID != "" {
-		if _, err := store.ApplyMachineHotState(ctx, *newest); err != nil {
+	if newest := newestReading(readings); newest != nil && newest.AssetTag != "" {
+		if _, err := store.ApplyAssetHotState(ctx, *newest); err != nil {
 			slog.Warn("registry sync failed after ingest",
-				"machineId", newest.MachineID, "err", err)
+				"assetTag", newest.AssetTag, "err", err)
 			result.RegistrySyncFailed = true
 			result.RegistrySyncError = err.Error()
 		}

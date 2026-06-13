@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	redisMachineChannelPrefix = "machine:telemetry:machine:"
-	redisLiveChannel          = "machine:telemetry:live"
+	redisAssetChannelPrefix = "machine:telemetry:machine:"
+	redisLiveChannel        = "machine:telemetry:live"
 )
 
 // Hub fans out readings in-process and via Redis pub/sub when REDIS_URL is set.
@@ -52,7 +52,7 @@ func (h *Hub) Publish(r Reading) {
 		return
 	}
 	h.local.Publish(r)
-	if h.redis == nil || r.MachineID == "" {
+	if h.redis == nil || r.AssetTag == "" {
 		return
 	}
 	b, err := json.Marshal(r)
@@ -60,8 +60,8 @@ func (h *Hub) Publish(r Reading) {
 		return
 	}
 	ctx := context.Background()
-	if err := h.redis.Publish(ctx, redisMachineChannelPrefix+r.MachineID, b).Err(); err != nil {
-		slog.Debug("redis telemetry publish", "machineId", r.MachineID, "err", err)
+	if err := h.redis.Publish(ctx, redisAssetChannelPrefix+r.AssetTag, b).Err(); err != nil {
+		slog.Debug("redis telemetry publish", "assetTag", r.AssetTag, "err", err)
 	}
 	if err := h.redis.Publish(ctx, redisLiveChannel, b).Err(); err != nil {
 		slog.Debug("redis live publish", "err", err)
@@ -70,7 +70,7 @@ func (h *Hub) Publish(r Reading) {
 
 // Subscribe returns readings for one machine. Uses Redis when configured, else
 // the in-process broker.
-func (h *Hub) Subscribe(machineID string) (<-chan Reading, func()) {
+func (h *Hub) Subscribe(assetTag string) (<-chan Reading, func()) {
 	if h == nil {
 		ch := make(chan Reading)
 		close(ch)
@@ -89,7 +89,7 @@ func (h *Hub) Subscribe(machineID string) (<-chan Reading, func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sub := h.redis.Subscribe(ctx, redisMachineChannelPrefix+machineID)
+			sub := h.redis.Subscribe(ctx, redisAssetChannelPrefix+assetTag)
 			defer func() { _ = sub.Close() }()
 			for msg := range sub.Channel() {
 				var r Reading
@@ -104,7 +104,7 @@ func (h *Hub) Subscribe(machineID string) (<-chan Reading, func()) {
 			close(out)
 		}
 	}
-	localCh, localCancel := h.local.Subscribe(machineID)
+	localCh, localCancel := h.local.Subscribe(assetTag)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -131,7 +131,7 @@ func (h *Hub) SubscribeLive() (<-chan Reading, func()) {
 	}
 	out := make(chan Reading, 64)
 	forward := func(r Reading) {
-		if r.MachineID == "" {
+		if r.AssetTag == "" {
 			return
 		}
 		select {

@@ -6,9 +6,9 @@
 //     plaintext is hashed (sha256) on creation and only the digest is persisted.
 //   - MTP binary TCP: cmd/gateway accepts the Machine Telemetry Protocol
 //     (see mtp.go), with the device identified by serial matching
-//     machine_iot_devices.serial.
+//     mes_iot_devices.serial.
 //
-// This service owns high-throughput ingest into the machine_telemetry_timeseries
+// This service owns high-throughput ingest into the mes_machine_telemetry
 // TimescaleDB hypertable plus the daily OEE rollup and downtime detection. The
 // iag-production and iag-mes domain services own business APIs, the device
 // registry UI, schema migrations, and reads.
@@ -68,7 +68,7 @@ type Device struct {
 	ID        int64      `json:"id"`
 	Serial    string     `json:"serial"`
 	Label     string     `json:"label,omitempty"`
-	MachineID string     `json:"machineId,omitempty"`
+	AssetTag  string     `json:"assetTag,omitempty"`
 	HasAPIKey bool       `json:"hasApiKey"`
 	IsActive  bool       `json:"isActive"`
 	LastSeen  *time.Time `json:"lastSeen,omitempty"`
@@ -77,12 +77,12 @@ type Device struct {
 }
 
 // Reading is one timestamped sample from a machine, persisted to
-// machine_telemetry_timeseries (Timescale hypertable). MachineID and TS are
+// mes_machine_telemetry (Timescale hypertable). AssetTag and TS are
 // required; every metric is best-effort and may be nil depending on the
 // machine's sensor map. GoodCount/RejectCount/CycleCount are cumulative
 // lifetime counters — the aggregator differences them to get per-day totals.
 type Reading struct {
-	MachineID    string          `json:"machineId"`
+	AssetTag     string          `json:"assetTag"`
 	DeviceID     *int64          `json:"deviceId,omitempty"`
 	TS           time.Time       `json:"ts"`
 	State        string          `json:"state"`
@@ -100,11 +100,11 @@ type Reading struct {
 }
 
 // DowntimeEvent is an auto-detected stoppage, derived from a contiguous run of
-// "down" readings, persisted to machine_downtime_events. Surfaced to MES as
+// "down" readings, persisted to mes_downtime_events. Surfaced to MES as
 // unplanned-downtime / fault-pareto input.
 type DowntimeEvent struct {
 	ID          int64      `json:"id,omitempty"`
-	MachineID   string     `json:"machineId"`
+	AssetTag    string     `json:"assetTag"`
 	StartedAt   time.Time  `json:"startedAt"`
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
 	DurationMin float64    `json:"durationMin"`
@@ -121,10 +121,10 @@ type DailyResult struct {
 	DowntimeEvents []DowntimeEvent `json:"downtimeEvents,omitempty"`
 }
 
-// DailySummary is one row of machine_telemetry_daily — the per-machine,
+// DailySummary is one row of mes_machine_oee_daily — the per-machine,
 // per-UTC-day OEE rollup.
 type DailySummary struct {
-	MachineID       string     `json:"machineId"`
+	AssetTag        string     `json:"assetTag"`
 	Day             time.Time  `json:"day"`
 	ReadingCount    int        `json:"readingCount"`
 	RunningMinutes  int        `json:"runningMinutes"`

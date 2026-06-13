@@ -1,14 +1,18 @@
 # machine-telemetry
 
-Production-machine IoT ingest for the IAG platform. **iag-production** and
-**iag-mes** own business APIs, the device-registry UI, schema migrations, and
-reads; **machine-telemetry** owns high-throughput ingest into the
-**`machine_telemetry_timeseries`** TimescaleDB hypertable, the daily OEE rollup,
-and downtime detection.
+Production-machine IoT ingest for the IAG platform, keyed on **`asset_tag`** —
+the platform-wide machine identity shared by **`mes_assets`** (the canonical
+machine/asset master, owned by MES), production (`prod_*.asset_tag`), and the
+CMMS. **iag-mes** and **iag-production** own business APIs, the device-registry
+UI, schema migrations, and reads; **machine-telemetry** owns high-throughput
+ingest into the **`mes_machine_telemetry`** TimescaleDB hypertable, the daily OEE
+rollup, and downtime detection.
 
-Mirrors the split that `Fleet_IoT` uses for vehicles — this is the
-manufacturing-floor equivalent (state, OEE counters, process metrics instead of
-GPS/fuel).
+It does **not** create its own machine registry — hot-state folds into the
+canonical `mes_assets` + `mes_asset_telemetry_latest`, and detected stoppages
+into the existing `mes_downtime_events`. Mirrors the split that `Fleet_IoT` uses
+for vehicles — the manufacturing-floor equivalent (state, OEE counters, process
+metrics instead of GPS/fuel).
 
 ## Architecture
 
@@ -18,9 +22,10 @@ Machines / PLC relays
     └─ HTTP JSON (:4090) → cmd/ingest    (Bearer device API key)
               │
               ▼
-    machine_telemetry_timeseries  (TimescaleDB hypertable on ts)
+    mes_machine_telemetry  (TimescaleDB hypertable on ts, keyed on asset_tag)
               │
-              ├─ cmd/aggregate → machine_telemetry_daily (OEE) + machine_downtime_events
+              ├─ ingest hot-state  → mes_assets.status + mes_asset_telemetry_latest
+              ├─ cmd/aggregate     → mes_machine_oee_daily (OEE) + mes_downtime_events (category='auto')
               └─ Redis pub/sub (optional) → production/MES SSE live floor view
 ```
 
@@ -45,7 +50,7 @@ Go module path: `github.com/iag/machine-telemetry`. GitHub / folder name: **mach
 ```json
 POST /v1/readings   Authorization: Bearer <device-api-key>
 {
-  "machineId": "MCH-001",
+  "assetTag": "MCH-001",
   "ts": "2026-06-13T08:30:00Z",
   "state": "running",
   "spindleRpm": 12000,
@@ -80,23 +85,34 @@ scaled temperature/vibration/power. See [`iot/mtp.go`](iot/mtp.go).
   rather than invented.
 - **OEE** = Availability × Performance × Quality (when all three are present).
 
-Contiguous `down` reading runs become `machine_downtime_events` for MES's
-unplanned-downtime / fault-pareto views.
+Contiguous `down` reading runs are written into the canonical
+`mes_downtime_events` with `category='auto'` (duration/confidence/fault in
+`attrs`), so they appear in MES's unplanned-downtime / fault-pareto views
+alongside manually logged downtime. A partial unique index makes re-runs
+idempotent.
 
 ## Schema ownership
 
-This service runs **no migrations**. Its tables are created by **MES** migration
-`006_machine_telemetry.sql` (schema `mes`) as a **parallel subsystem** keyed on
-`machine_id` — intentionally separate from MES's existing `mes_assets` /
-`mes_asset_telemetry_latest` / `mes_downtime_events` (keyed on `asset_tag`),
-**to be reconciled later**. `deploy/schema.sql` mirrors that DDL for reference.
-The service DSN must put `mes` on the `search_path` (see `config/.env.example`).
-Requires the TimescaleDB extension on the hypertable.
+This service runs **no migrations**. It speaks the shared `asset_tag` machine
+identity and writes against the MES-owned schema:
+
+| Table | Role | Owner |
+|-------|------|-------|
+| `mes_assets` | canonical machine/asset master (hot-state target) | MES (existing) |
+| `mes_asset_telemetry_latest` | live per-metric values | MES (existing) |
+| `mes_downtime_events` | CMMS downtime log (auto + manual) | MES (existing) |
+| `mes_machine_telemetry` | high-throughput readings hypertable | **added** by `006_machine_telemetry.sql` |
+| `mes_machine_oee_daily` | daily OEE rollup | **added** |
+| `mes_iot_devices` | device registry (serial → asset binding) | **added** |
+
+The added tables come from **MES** migration `006_machine_telemetry.sql` (schema
+`mes`). The service DSN must put `mes` on the `search_path` (see
+`config/.env.example`). Requires the TimescaleDB extension on the hypertable.
 
 ## Monorepo wiring
 
 ```go
-// services/operations/production/go.mod
+// services/operations/mes/go.mod
 require github.com/iag/machine-telemetry v0.0.0
 replace github.com/iag/machine-telemetry => ../../../edge/machine-telemetry
 ```

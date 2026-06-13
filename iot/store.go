@@ -55,10 +55,10 @@ func (s *Store) tel() *pgxpool.Pool {
 // ─────────────────────────────── Devices ────────────────────────────────
 
 type CreateDeviceInput struct {
-	Serial    string
-	Label     string
-	MachineID string
-	IssueKey  bool // when true, a fresh API key is generated; the plaintext is returned once
+	Serial   string
+	Label    string
+	AssetTag string
+	IssueKey bool // when true, a fresh API key is generated; the plaintext is returned once
 }
 
 type CreatedDevice struct {
@@ -77,13 +77,13 @@ func (s *Store) CreateDevice(ctx context.Context, in CreateDeviceInput) (*Create
 		keyHash = hashAPIKey(plaintext)
 	}
 	q := fmt.Sprintf(`
-        INSERT INTO %s (serial, label, machine_id, api_key_hash)
+        INSERT INTO %s (serial, label, asset_tag, api_key_hash)
         VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''))
-        RETURNING id, serial, COALESCE(label,''), COALESCE(machine_id,''),
+        RETURNING id, serial, COALESCE(label,''), COALESCE(asset_tag,''),
                   api_key_hash IS NOT NULL, is_active, last_seen, COALESCE(last_ip,''), created_at`, DevicesTable)
 	var d Device
-	err := s.op().QueryRow(ctx, q, in.Serial, in.Label, in.MachineID, keyHash).Scan(
-		&d.ID, &d.Serial, &d.Label, &d.MachineID,
+	err := s.op().QueryRow(ctx, q, in.Serial, in.Label, in.AssetTag, keyHash).Scan(
+		&d.ID, &d.Serial, &d.Label, &d.AssetTag,
 		&d.HasAPIKey, &d.IsActive, &d.LastSeen, &d.LastIP, &d.CreatedAt,
 	)
 	if err != nil {
@@ -94,7 +94,7 @@ func (s *Store) CreateDevice(ctx context.Context, in CreateDeviceInput) (*Create
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	q := fmt.Sprintf(`
-        SELECT id, serial, COALESCE(label,''), COALESCE(machine_id,''),
+        SELECT id, serial, COALESCE(label,''), COALESCE(asset_tag,''),
                api_key_hash IS NOT NULL, is_active, last_seen, COALESCE(last_ip,''), created_at
         FROM %s ORDER BY created_at DESC`, DevicesTable)
 	rows, err := s.op().Query(ctx, q)
@@ -106,7 +106,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	for rows.Next() {
 		var d Device
 		if err := rows.Scan(
-			&d.ID, &d.Serial, &d.Label, &d.MachineID,
+			&d.ID, &d.Serial, &d.Label, &d.AssetTag,
 			&d.HasAPIKey, &d.IsActive, &d.LastSeen, &d.LastIP, &d.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -121,12 +121,12 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 // device is registered but disabled.
 func (s *Store) FindBySerial(ctx context.Context, serial string) (*Device, error) {
 	q := fmt.Sprintf(`
-        SELECT id, serial, COALESCE(label,''), COALESCE(machine_id,''),
+        SELECT id, serial, COALESCE(label,''), COALESCE(asset_tag,''),
                api_key_hash IS NOT NULL, is_active, last_seen, COALESCE(last_ip,''), created_at
         FROM %s WHERE serial = $1`, DevicesTable)
 	var d Device
 	err := s.op().QueryRow(ctx, q, serial).Scan(
-		&d.ID, &d.Serial, &d.Label, &d.MachineID,
+		&d.ID, &d.Serial, &d.Label, &d.AssetTag,
 		&d.HasAPIKey, &d.IsActive, &d.LastSeen, &d.LastIP, &d.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -150,12 +150,12 @@ func (s *Store) AuthenticateAPIKey(ctx context.Context, plaintext string) (*Devi
 	}
 	digest := hashAPIKey(plaintext)
 	q := fmt.Sprintf(`
-        SELECT id, serial, COALESCE(label,''), COALESCE(machine_id,''),
+        SELECT id, serial, COALESCE(label,''), COALESCE(asset_tag,''),
                api_key_hash IS NOT NULL, is_active, last_seen, COALESCE(last_ip,''), created_at
         FROM %s WHERE api_key_hash = $1`, DevicesTable)
 	var d Device
 	err := s.op().QueryRow(ctx, q, digest).Scan(
-		&d.ID, &d.Serial, &d.Label, &d.MachineID,
+		&d.ID, &d.Serial, &d.Label, &d.AssetTag,
 		&d.HasAPIKey, &d.IsActive, &d.LastSeen, &d.LastIP, &d.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -200,7 +200,7 @@ func (s *Store) MarkSeen(ctx context.Context, deviceID int64, ip string) error {
 
 // ─────────────────────────────── Readings ───────────────────────────────
 
-// InsertReadings persists a batch. Duplicate (machine_id, ts) rows are skipped
+// InsertReadings persists a batch. Duplicate (asset_tag, ts) rows are skipped
 // by the ON CONFLICT clause.
 func (s *Store) InsertReadings(ctx context.Context, readings []Reading) (int, error) {
 	if len(readings) == 0 {
@@ -214,7 +214,7 @@ func (s *Store) InsertReadings(ctx context.Context, readings []Reading) (int, er
 		}
 		state := NormalizeState(r.State)
 		batch.Queue(sqlInsertReading,
-			r.MachineID, r.DeviceID, r.TS, state, r.SpindleRPM, r.FeedRate,
+			r.AssetTag, r.DeviceID, r.TS, state, r.SpindleRPM, r.FeedRate,
 			r.TemperatureC, r.VibrationMmS, r.PressureBar, r.PowerKW,
 			r.GoodCount, r.RejectCount, r.CycleCount, r.FaultCode, raw,
 		)
@@ -233,8 +233,8 @@ func (s *Store) InsertReadings(ctx context.Context, readings []Reading) (int, er
 }
 
 // LatestReading returns the most recent reading for a machine, or nil if none.
-func (s *Store) LatestReading(ctx context.Context, machineID string) (*Reading, error) {
-	row := s.tel().QueryRow(ctx, sqlLatestReading, machineID)
+func (s *Store) LatestReading(ctx context.Context, assetTag string) (*Reading, error) {
+	row := s.tel().QueryRow(ctx, sqlLatestReading, assetTag)
 	r, err := scanReading(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -245,7 +245,7 @@ func (s *Store) LatestReading(ctx context.Context, machineID string) (*Reading, 
 // Track returns readings for a machine in [from, to], oldest first, capped at
 // limit (default 5000). When after is non-nil, only readings with ts > after
 // are returned (cursor pagination).
-func (s *Store) Track(ctx context.Context, machineID string, from, to time.Time, limit int, after *time.Time) ([]Reading, error) {
+func (s *Store) Track(ctx context.Context, assetTag string, from, to time.Time, limit int, after *time.Time) ([]Reading, error) {
 	maxRows := MaxTrackRowLimit()
 	if limit <= 0 {
 		limit = 5000
@@ -256,9 +256,9 @@ func (s *Store) Track(ctx context.Context, machineID string, from, to time.Time,
 	var rows pgx.Rows
 	var err error
 	if after != nil && !after.IsZero() {
-		rows, err = s.tel().Query(ctx, sqlTrackReadingsAfter, machineID, *after, from, to, limit)
+		rows, err = s.tel().Query(ctx, sqlTrackReadingsAfter, assetTag, *after, from, to, limit)
 	} else {
-		rows, err = s.tel().Query(ctx, sqlTrackReadings, machineID, from, to, limit)
+		rows, err = s.tel().Query(ctx, sqlTrackReadings, assetTag, from, to, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -277,10 +277,10 @@ func (s *Store) Track(ctx context.Context, machineID string, from, to time.Time,
 
 // ReadingsForDay loads every reading for one (machine, day) UTC, oldest first.
 // Used by cmd/aggregate.
-func (s *Store) ReadingsForDay(ctx context.Context, machineID string, day time.Time) ([]Reading, error) {
+func (s *Store) ReadingsForDay(ctx context.Context, assetTag string, day time.Time) ([]Reading, error) {
 	start := day.UTC().Truncate(24 * time.Hour)
 	end := start.Add(24 * time.Hour)
-	rows, err := s.tel().Query(ctx, sqlReadingsForDay, machineID, start, end)
+	rows, err := s.tel().Query(ctx, sqlReadingsForDay, assetTag, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -296,25 +296,25 @@ func (s *Store) ReadingsForDay(ctx context.Context, machineID string, day time.T
 	return out, rows.Err()
 }
 
-// MachineDay is a (machine_id, day) pair with at least one reading.
-type MachineDay struct {
-	MachineID string
-	Day       time.Time
+// AssetDay is a (asset_tag, day) pair with at least one reading.
+type AssetDay struct {
+	AssetTag string
+	Day      time.Time
 }
 
-// DistinctMachineDays returns every (machine_id, day) pair that has at least
+// DistinctAssetDays returns every (asset_tag, day) pair that has at least
 // one reading in [from, to). Days are returned at UTC midnight. Drives the
 // aggregator without scanning machines that have no telemetry.
-func (s *Store) DistinctMachineDays(ctx context.Context, from, to time.Time) ([]MachineDay, error) {
-	rows, err := s.tel().Query(ctx, sqlDistinctMachineDays, from, to)
+func (s *Store) DistinctAssetDays(ctx context.Context, from, to time.Time) ([]AssetDay, error) {
+	rows, err := s.tel().Query(ctx, sqlDistinctAssetDays, from, to)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []MachineDay
+	var out []AssetDay
 	for rows.Next() {
-		var v MachineDay
-		if err := rows.Scan(&v.MachineID, &v.Day); err != nil {
+		var v AssetDay
+		if err := rows.Scan(&v.AssetTag, &v.Day); err != nil {
 			return nil, err
 		}
 		v.Day = v.Day.UTC()
@@ -323,10 +323,10 @@ func (s *Store) DistinctMachineDays(ctx context.Context, from, to time.Time) ([]
 	return out, rows.Err()
 }
 
-// UpsertDaily inserts or replaces one machine_telemetry_daily row. Idempotent.
+// UpsertDaily inserts or replaces one mes_machine_oee_daily row. Idempotent.
 func (s *Store) UpsertDaily(ctx context.Context, sum DailySummary) error {
 	_, err := s.tel().Exec(ctx, sqlUpsertDaily,
-		sum.MachineID, sum.Day, sum.ReadingCount, sum.RunningMinutes, sum.IdleMinutes,
+		sum.AssetTag, sum.Day, sum.ReadingCount, sum.RunningMinutes, sum.IdleMinutes,
 		sum.DownMinutes, sum.SetupMinutes, sum.GoodTotal, sum.RejectTotal, sum.CyclesTotal,
 		sum.Availability, sum.Performance, sum.Quality, sum.OEE,
 		sum.MaxTemperatureC, sum.AvgSpindleRPM, sum.FirstReading, sum.LastReading,
@@ -334,10 +334,10 @@ func (s *Store) UpsertDaily(ctx context.Context, sum DailySummary) error {
 	return err
 }
 
-// ListDailySummaries returns machine_telemetry_daily rows for one machine in
+// ListDailySummaries returns mes_machine_oee_daily rows for one machine in
 // [from, to] (UTC dates).
-func (s *Store) ListDailySummaries(ctx context.Context, machineID string, from, to time.Time) ([]DailySummary, error) {
-	rows, err := s.tel().Query(ctx, sqlListDaily, machineID, from.UTC(), to.UTC())
+func (s *Store) ListDailySummaries(ctx context.Context, assetTag string, from, to time.Time) ([]DailySummary, error) {
+	rows, err := s.tel().Query(ctx, sqlListDaily, assetTag, from.UTC(), to.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +346,7 @@ func (s *Store) ListDailySummaries(ctx context.Context, machineID string, from, 
 	for rows.Next() {
 		var sum DailySummary
 		if err := rows.Scan(
-			&sum.MachineID, &sum.Day, &sum.ReadingCount, &sum.RunningMinutes, &sum.IdleMinutes,
+			&sum.AssetTag, &sum.Day, &sum.ReadingCount, &sum.RunningMinutes, &sum.IdleMinutes,
 			&sum.DownMinutes, &sum.SetupMinutes, &sum.GoodTotal, &sum.RejectTotal, &sum.CyclesTotal,
 			&sum.Availability, &sum.Performance, &sum.Quality, &sum.OEE,
 			&sum.MaxTemperatureC, &sum.AvgSpindleRPM, &sum.FirstReading, &sum.LastReading,
@@ -358,13 +358,15 @@ func (s *Store) ListDailySummaries(ctx context.Context, machineID string, from, 
 	return out, rows.Err()
 }
 
-// InsertDowntimeEvents persists a batch. Conflicts on (machine_id, started_at)
-// are ignored so re-running the aggregator over the same day is idempotent.
+// InsertDowntimeEvents writes auto-detected stoppages into the canonical CMMS
+// log (mes_downtime_events, category='auto'). The partial unique index makes
+// aggregator re-runs idempotent. duration/confidence/fault ride in attrs.
+// Targets the operational pool — downtime is CMMS data, not timeseries.
 func (s *Store) InsertDowntimeEvents(ctx context.Context, events []DowntimeEvent) (int, error) {
 	if len(events) == 0 {
 		return 0, nil
 	}
-	tx, err := s.tel().Begin(ctx)
+	tx, err := s.op().Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -372,9 +374,18 @@ func (s *Store) InsertDowntimeEvents(ctx context.Context, events []DowntimeEvent
 
 	written := 0
 	for _, ev := range events {
+		attrs, _ := json.Marshal(map[string]any{
+			"duration_min": ev.DurationMin,
+			"confidence":   ev.Confidence,
+			"fault_code":   ev.FaultCode,
+			"source":       "machine-telemetry",
+		})
+		reason := ev.Reason
+		if reason == "" {
+			reason = "unplanned stop"
+		}
 		tag, err := tx.Exec(ctx, sqlInsertDowntime,
-			ev.MachineID, ev.StartedAt, ev.EndedAt, ev.DurationMin,
-			ev.FaultCode, ev.Reason, ev.Confidence, ev.Notes,
+			ev.AssetTag, reason, ev.StartedAt, ev.EndedAt, attrs,
 		)
 		if err != nil {
 			return written, err
@@ -411,7 +422,7 @@ func scanReading(row rowScanner) (*Reading, error) {
 	var r Reading
 	var raw []byte
 	err := row.Scan(
-		&r.MachineID, &r.DeviceID, &r.TS, &r.State, &r.SpindleRPM, &r.FeedRate,
+		&r.AssetTag, &r.DeviceID, &r.TS, &r.State, &r.SpindleRPM, &r.FeedRate,
 		&r.TemperatureC, &r.VibrationMmS, &r.PressureBar, &r.PowerKW,
 		&r.GoodCount, &r.RejectCount, &r.CycleCount, &r.FaultCode, &raw,
 	)

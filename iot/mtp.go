@@ -168,7 +168,7 @@ func RecordToReading(rec MTPRecord, device *Device) Reading {
 	cycles := int64(rec.CycleCount)
 
 	r := Reading{
-		MachineID:    device.MachineID,
+		AssetTag:     device.AssetTag,
 		DeviceID:     &devID,
 		TS:           rec.Timestamp,
 		State:        StateForCode(rec.State),
