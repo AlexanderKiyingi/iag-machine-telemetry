@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -28,6 +29,11 @@ var (
 type Store struct {
 	operational *pgxpool.Pool
 	telemetry   *pgxpool.Pool
+
+	// authCache holds api_key_hash → cachedDevice for deviceAuthTTL. Ingest
+	// authenticates on every request, so without it each POST spends a round
+	// trip resolving a key to a row that essentially never changes.
+	authCache sync.Map
 }
 
 // NewStore wires one pool for both operational and telemetry tables (local dev).
@@ -144,11 +150,46 @@ func (s *Store) FindBySerial(ctx context.Context, serial string) (*Device, error
 // AuthenticateAPIKey resolves a device by the plaintext API key from the HTTP
 // Authorization header. The supplied key is hashed and looked up directly on
 // the indexed api_key_hash column.
+// deviceAuthTTL is how long a successful key lookup is reused.
+//
+// Every ingest request authenticates, so this was one database round trip per
+// POST purely to turn a key into a device row that changes approximately never.
+// Thirty seconds bounds how long a revoked key or a deactivated device stays
+// usable, which is the only thing the cache can get wrong.
+//
+// Failures are deliberately NOT cached: a wrong key must stay cheap to reject
+// but must not be able to pin a negative result, and a device that was just
+// activated should start working immediately rather than after a TTL.
+const deviceAuthTTL = 30 * time.Second
+
+type cachedDevice struct {
+	device Device
+	at     time.Time
+}
+
+// InvalidateDeviceAuth drops a cached key→device entry. Called after rotating
+// or deactivating a device so the change takes effect now rather than at TTL.
+func (s *Store) InvalidateDeviceAuth() {
+	s.authCache.Range(func(k, _ any) bool {
+		s.authCache.Delete(k)
+		return true
+	})
+}
+
 func (s *Store) AuthenticateAPIKey(ctx context.Context, plaintext string) (*Device, error) {
 	if plaintext == "" {
 		return nil, ErrInvalidAPIKey
 	}
 	digest := hashAPIKey(plaintext)
+
+	if v, ok := s.authCache.Load(digest); ok {
+		if hit, isEntry := v.(cachedDevice); isEntry && time.Since(hit.at) < deviceAuthTTL {
+			d := hit.device
+			return &d, nil
+		}
+		s.authCache.Delete(digest)
+	}
+
 	q := fmt.Sprintf(`
         SELECT id, serial, COALESCE(label,''), COALESCE(asset_tag,''),
                api_key_hash IS NOT NULL, is_active, last_seen, COALESCE(last_ip,''), created_at
@@ -165,8 +206,11 @@ func (s *Store) AuthenticateAPIKey(ctx context.Context, plaintext string) (*Devi
 		return nil, err
 	}
 	if !d.IsActive {
+		// Not cached: an inactive device that gets reactivated should start
+		// working on its next request, not at the end of a TTL.
 		return nil, ErrInactiveDevice
 	}
+	s.authCache.Store(digest, cachedDevice{device: d, at: time.Now()})
 	return &d, nil
 }
 
@@ -187,13 +231,33 @@ func (s *Store) RotateAPIKey(ctx context.Context, id int64) (string, error) {
 	if tag.RowsAffected() == 0 {
 		return "", ErrDeviceNotFound
 	}
+	// The old key must stop working now, not at the end of deviceAuthTTL —
+	// rotation is usually a response to a leak, and a 30-second grace period
+	// for the leaked key is exactly what rotation exists to prevent.
+	s.InvalidateDeviceAuth()
 	return plaintext, nil
 }
 
+// MarkSeenInterval is how stale a device's last_seen is allowed to get.
+//
+// This UPDATE used to run on every ingest request. A relay posting every few
+// seconds rewrote its own registry row constantly, for a column whose only job
+// is answering "when did we last hear from this unit" — dead-tuple production
+// on a small, frequently-read table, on the shared platform Postgres.
+const MarkSeenInterval = time.Minute
+
+// MarkSeen records that a device is alive, at most once per MarkSeenInterval.
+// The throttle is in SQL rather than in process memory so it holds across
+// restarts and across replicas.
 func (s *Store) MarkSeen(ctx context.Context, deviceID int64, ip string) error {
-	_, err := s.op().Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET last_seen = NOW(), last_ip = NULLIF($2, '') WHERE id = $1`, DevicesTable),
-		deviceID, ip,
+	_, err := s.op().Exec(ctx, fmt.Sprintf(`
+		UPDATE %s
+		   SET last_seen = NOW(), last_ip = NULLIF($2, '')
+		 WHERE id = $1
+		   AND (last_seen IS NULL
+		        OR last_seen < NOW() - $3::interval
+		        OR last_ip IS DISTINCT FROM NULLIF($2, ''))`, DevicesTable),
+		deviceID, ip, MarkSeenInterval.String(),
 	)
 	return err
 }

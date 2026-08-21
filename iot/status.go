@@ -76,18 +76,34 @@ func (s *Store) upsertLatest(ctx context.Context, r Reading) error {
 		{"reject_count", f64(r.RejectCount), "ea"},
 		{"cycle_count", f64(r.CycleCount), "ea"},
 	}
-	q := fmt.Sprintf(`
-        INSERT INTO %s (asset_tag, metric, value, unit, recorded_at)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (asset_tag, metric) DO UPDATE SET
-            value = EXCLUDED.value, unit = EXCLUDED.unit, recorded_at = EXCLUDED.recorded_at`, LatestTable)
+	// One statement for every present metric, not one per metric.
+	//
+	// This loop used to issue up to nine separate round trips per reading, with
+	// no transaction around them — so a failure halfway left the latest-value
+	// table describing a machine state that never existed. Unnesting arrays
+	// makes it a single multi-row upsert: one trip, and atomic by construction.
+	names := make([]string, 0, len(metrics))
+	values := make([]float64, 0, len(metrics))
+	units := make([]string, 0, len(metrics))
 	for _, m := range metrics {
 		if m.val == nil {
 			continue
 		}
-		if _, err := s.op().Exec(ctx, q, r.AssetTag, m.name, *m.val, m.unit, r.TS); err != nil {
-			return err
-		}
+		names = append(names, m.name)
+		values = append(values, *m.val)
+		units = append(units, m.unit)
 	}
-	return nil
+	if len(names) == 0 {
+		return nil
+	}
+
+	q := fmt.Sprintf(`
+        INSERT INTO %s (asset_tag, metric, value, unit, recorded_at)
+        SELECT $1, m.metric, m.value, m.unit, $5
+          FROM unnest($2::text[], $3::double precision[], $4::text[])
+               AS m(metric, value, unit)
+        ON CONFLICT (asset_tag, metric) DO UPDATE SET
+            value = EXCLUDED.value, unit = EXCLUDED.unit, recorded_at = EXCLUDED.recorded_at`, LatestTable)
+	_, err := s.op().Exec(ctx, q, r.AssetTag, names, values, units, r.TS)
+	return err
 }
