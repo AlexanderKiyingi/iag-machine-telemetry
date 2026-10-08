@@ -454,12 +454,51 @@ func (s *Store) InsertDowntimeEvents(ctx context.Context, events []DowntimeEvent
 		if err != nil {
 			return written, err
 		}
-		written += int(tag.RowsAffected())
+		if tag.RowsAffected() == 0 {
+			// ON CONFLICT DO NOTHING: the aggregator has seen this stoppage
+			// before. Re-announcing it would reopen and reclose an interval
+			// in iag-production on every re-run, so a row that was not
+			// written gets no event.
+			continue
+		}
+		written++
+
+		// Announce the stoppage as a start and, when it is already over, an
+		// end. The aggregator detects stoppages after the fact, so most
+		// carry both: iag-production's MirrorAssetDowntime opens the interval
+		// at one timestamp and closes it at the other, reproducing the stop
+		// rather than leaving a machine down for ever.
+		if err := enqueueDowntime(ctx, tx, EventDowntimeStarted, ev.AssetTag, reason, ev.StartedAt); err != nil {
+			return written, err
+		}
+		if ev.EndedAt != nil {
+			if err := enqueueDowntime(ctx, tx, EventDowntimeEnded, ev.AssetTag, reason, *ev.EndedAt); err != nil {
+				return written, err
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return written, err
 	}
 	return written, nil
+}
+
+// enqueueDowntime writes one mes.downtime.* event to the MES outbox, in the
+// caller's transaction, with the payload shape iag-mes itself publishes —
+// asset_tag, category, reason and an RFC3339 timestamp — so iag-production's
+// consumer needs no special case for events that came from a device.
+func enqueueDowntime(ctx context.Context, tx pgx.Tx, eventType, assetTag, reason string, at time.Time) error {
+	payload, err := json.Marshal(map[string]any{
+		"asset_tag": assetTag,
+		"category":  "auto",
+		"reason":    reason,
+		"timestamp": at.UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, sqlEnqueueEvent, TopicOperations, eventType, assetTag, payload)
+	return err
 }
 
 // PurgeBefore drops readings older than the cutoff. Called by cmd/aggregate -purge.

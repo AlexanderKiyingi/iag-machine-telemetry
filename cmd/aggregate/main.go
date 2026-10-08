@@ -65,7 +65,20 @@ func main() {
 	}
 	slog.Info("aggregation complete", "dailyRows", rolled, "downtimeEvents", downtimeWritten)
 
-	if days := intEnv("PURGE_DAYS", 0); days > 0 {
+	// Retention defaults to the policy the platform already declares rather
+	// than to nothing.
+	//
+	// iag-mes migration 008 asks for compress-after-7-days and
+	// retain-after-180-days on mes_machine_telemetry, but it is a TimescaleDB
+	// policy and TimescaleDB is not installed on the production database — the
+	// migration raises a notice and returns, so nothing enforces it. With
+	// PURGE_DAYS defaulting to 0 nothing enforced it here either, and a table
+	// taking a row per machine per reading grows without bound: one machine at
+	// a reading a second is ~86k rows a day.
+	//
+	// 180 is not a new decision; it is 008's number, applied where it can
+	// actually run. Set PURGE_DAYS=0 to keep everything.
+	if days := intEnv("PURGE_DAYS", 180); days > 0 {
 		cutoff := time.Now().UTC().AddDate(0, 0, -days)
 		n, err := store.PurgeBefore(ctx, cutoff)
 		if err != nil {
