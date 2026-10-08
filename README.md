@@ -37,6 +37,15 @@ Machines / PLC relays
 
 Go module path: `github.com/iag/machine-telemetry`. GitHub / folder name: **machine-telemetry**.
 
+## Retention
+
+`mes_machine_telemetry` is declared as a TimescaleDB hypertable and iag-mes
+migration 008 asks for compression after 7 days and retention after 180.
+**TimescaleDB is not installed on the production database**, so that migration
+raises a notice and returns and neither policy exists. `cmd/aggregate` applies
+the same 180 days itself (`PURGE_DAYS`, set to 0 to keep everything), which is
+the only retention in force until the extension is installed.
+
 ## Binaries
 
 | Binary | Default | Description |

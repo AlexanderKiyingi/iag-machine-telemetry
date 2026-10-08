@@ -20,6 +20,7 @@ package iot
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,12 @@ const (
 	StateDown    = "down"
 	StateSetup   = "setup"
 	StateBlocked = "blocked"
+	// Not powered — isolator open, out of service, a standby machine nothing
+	// has called for. Distinct from idle, which is powered and available with
+	// no work. iag-production separates the two (019) and nothing could report
+	// the difference, so the easiest signal a device has was the one with
+	// nowhere to go.
+	StateOff = "off"
 )
 
 // stateByCode maps the MTP wire byte to a state string (see mtp.go).
@@ -42,6 +49,7 @@ var stateByCode = map[uint8]string{
 	3: StateDown,
 	4: StateSetup,
 	5: StateBlocked,
+	6: StateOff,
 }
 
 // StateForCode resolves an MTP state byte, defaulting to "unknown".
@@ -54,10 +62,28 @@ func StateForCode(code uint8) string {
 
 // NormalizeState lower-cases and validates a state string, defaulting to
 // "unknown" for anything unrecognized.
+// NormalizeState maps whatever a device sent onto the known set.
+//
+// Case and padding are tolerated because this parses a wire field: firmware
+// sends "Running", "OFF", " idle " and all of them meant something. An exact
+// match turned each into `unknown`, which does not fail — it silently records
+// that we do not know what a machine was doing, and an unknown minute counts
+// toward nothing. Anything genuinely unrecognised still becomes `unknown`,
+// which is the honest answer for a state we cannot name.
 func NormalizeState(s string) string {
-	switch s {
-	case StateRunning, StateIdle, StateDown, StateSetup, StateBlocked, StateUnknown:
-		return s
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case StateRunning:
+		return StateRunning
+	case StateIdle:
+		return StateIdle
+	case StateDown:
+		return StateDown
+	case StateSetup:
+		return StateSetup
+	case StateBlocked:
+		return StateBlocked
+	case StateOff:
+		return StateOff
 	default:
 		return StateUnknown
 	}

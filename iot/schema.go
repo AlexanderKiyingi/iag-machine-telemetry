@@ -16,6 +16,21 @@ const DailyTable = "mes_machine_oee_daily"
 // downtime.
 const DowntimeTable = "mes_downtime_events"
 
+// OutboxTable is iag-mes's event outbox. Its relay claims undispatched rows
+// and publishes them to Kafka, so writing here is how this service reaches
+// the rest of the platform without importing any of it.
+const OutboxTable = "mes_event_outbox"
+
+// TopicOperations is where iag-mes sends downtime events (events.TopicForEvent)
+// and what iag-production's consumer subscribes to.
+const TopicOperations = "iag.operations"
+
+// The event types iag-production's consumer switches on.
+const (
+	EventDowntimeStarted = "mes.downtime.started"
+	EventDowntimeEnded   = "mes.downtime.ended"
+)
+
 // DevicesTable is the operational IoT device registry (serial → asset binding,
 // hashed API key).
 const DevicesTable = "mes_iot_devices"

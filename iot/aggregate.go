@@ -81,7 +81,20 @@ func AggregateDay(assetTag string, day time.Time, readings []Reading, p Aggregat
 	}
 
 	// OEE components.
-	scheduled := stateMinutes[StateRunning] + stateMinutes[StateDown] + stateMinutes[StateSetup]
+	//
+	// Availability is run time over the time the machine was there to be run.
+	// The denominator used to be running+down+setup, which leaves idle and
+	// blocked out — so a machine that ran one minute and stood idle for the
+	// rest of the shift reported ~100% availability, and a badly-utilised
+	// plant looked like a well-run one. Idle during production time is a loss
+	// under any reading of OEE, so it counts.
+	//
+	// `off` is excluded on purpose, and is the one exclusion that is right: a
+	// machine that was not powered was not available to be run, and counting
+	// it would punish a plant for switching off what it did not need.
+	// `unknown` is excluded because it means no data, not no production.
+	scheduled := stateMinutes[StateRunning] + stateMinutes[StateDown] +
+		stateMinutes[StateSetup] + stateMinutes[StateIdle] + stateMinutes[StateBlocked]
 	if scheduled > 0 {
 		a := stateMinutes[StateRunning] / scheduled
 		sum.Availability = &a

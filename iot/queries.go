@@ -90,8 +90,32 @@ var (
 	// Auto-detected downtime is written into the canonical CMMS log with
 	// category='auto'; duration/confidence/fault ride in attrs. The partial
 	// unique index (category='auto') makes aggregator re-runs idempotent.
+	//
+	// `state` is set explicitly. The column defaults to 'open' (MES 013) and
+	// the aggregator writes stoppages that have already finished, so every
+	// auto row landed in the live downtime log as an ongoing stop and the
+	// machine looked permanently down. A row with an end is closed.
 	sqlInsertDowntime = fmt.Sprintf(`
-        INSERT INTO %s (asset_tag, category, reason, started_at, ended_at, attrs)
-        VALUES ($1, 'auto', $2, $3, $4, $5::jsonb)
+        INSERT INTO %s (asset_tag, category, reason, state, started_at, ended_at, attrs)
+        VALUES ($1, 'auto', $2, CASE WHEN $4::timestamptz IS NULL THEN 'open' ELSE 'closed' END,
+                $3, $4, $5::jsonb)
         ON CONFLICT (asset_tag, started_at) WHERE category = 'auto' DO NOTHING`, DowntimeTable)
+
+	// Events for the rest of the platform, written in the same transaction as
+	// the downtime row they describe.
+	//
+	// iag-mes publishes mes.downtime.* from its own CreateDowntimeEvent via
+	// bus.PublishTx → mes_event_outbox → Kafka, and the table has no trigger.
+	// Writing the row directly, as this service does, therefore published
+	// nothing: a detected stoppage showed in the MES downtime list and Pareto
+	// and never reached iag-production, so it produced no time-log interval,
+	// no shift data and no KPI.
+	//
+	// Enqueuing here rather than calling MES over HTTP keeps the stoppage and
+	// its announcement in one transaction — neither can exist without the
+	// other — and adds no coupling: the outbox is a plain table and the MES
+	// relay already drains it.
+	sqlEnqueueEvent = fmt.Sprintf(`
+        INSERT INTO %s (kafka_topic, event_type, event_key, payload)
+        VALUES ($1, $2, $3, $4::jsonb)`, OutboxTable)
 )
