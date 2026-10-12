@@ -145,6 +145,23 @@ type DowntimeEvent struct {
 type DailyResult struct {
 	Summary        DailySummary    `json:"summary"`
 	DowntimeEvents []DowntimeEvent `json:"downtimeEvents,omitempty"`
+	// What the machine was doing when it was not broken. Downtime alone told
+	// iag-production when a machine stopped and never when it ran, so a
+	// sensor-fed machine reported availability of running(0) ÷ scheduled — a
+	// confident 0% for a machine that worked all shift.
+	StateIntervals []StateInterval `json:"stateIntervals,omitempty"`
+}
+
+// StateInterval is a run of consecutive readings in one state, bounded the
+// same way a detected stoppage is: it ends at the first reading that says
+// something else, or — for a run with nothing after it — at the last reading
+// plus the gap cap, because a machine that stopped reporting is not a machine
+// that kept running.
+type StateInterval struct {
+	AssetTag  string    `json:"assetTag"`
+	State     string    `json:"state"`
+	StartedAt time.Time `json:"startedAt"`
+	EndedAt   time.Time `json:"endedAt"`
 }
 
 // DailySummary is one row of mes_machine_oee_daily — the per-machine,

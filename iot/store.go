@@ -501,6 +501,54 @@ func enqueueDowntime(ctx context.Context, tx pgx.Tx, eventType, assetTag, reason
 	return err
 }
 
+// AnnounceStateIntervals tells iag-production what a machine was doing when it
+// was not broken.
+//
+// Without this the only thing a device ever contributed to production was
+// stoppages, so a sensor-fed machine had down intervals and no running time
+// at all — and MACH_AVAILABILITY, which is pct(running_min, scheduled_min)
+// over the shift timetable, reported a confident 0% for a machine that had
+// worked all shift. A wrong number nobody can see the cause of is worse than
+// an absent one.
+//
+// Idempotent on (machine, state, start): the aggregator recomputes intervals
+// over a trailing window rather than remembering which it has sent, so the
+// same interval is offered on every run.
+func (s *Store) AnnounceStateIntervals(ctx context.Context, intervals []StateInterval) (int, error) {
+	if len(intervals) == 0 {
+		return 0, nil
+	}
+	tx, err := s.op().Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	sent := 0
+	for _, iv := range intervals {
+		payload, err := json.Marshal(map[string]any{
+			"asset_tag":  iv.AssetTag,
+			"state":      iv.State,
+			"started_at": iv.StartedAt.UTC().Format(time.RFC3339),
+			"ended_at":   iv.EndedAt.UTC().Format(time.RFC3339),
+			"source":     "sensor",
+		})
+		if err != nil {
+			return sent, err
+		}
+		tag, err := tx.Exec(ctx, sqlEnqueueStateOnce,
+			TopicOperations, EventMachineState, iv.AssetTag, payload)
+		if err != nil {
+			return sent, err
+		}
+		sent += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sent, err
+	}
+	return sent, nil
+}
+
 // PurgeBefore drops readings older than the cutoff. Called by cmd/aggregate -purge.
 func (s *Store) PurgeBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	tag, err := s.tel().Exec(ctx, sqlPurgeBefore, cutoff)

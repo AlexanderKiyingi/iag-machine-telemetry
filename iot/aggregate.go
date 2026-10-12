@@ -117,7 +117,11 @@ func AggregateDay(assetTag string, day time.Time, readings []Reading, p Aggregat
 		sum.OEE = &oee
 	}
 
-	return DailyResult{Summary: sum, DowntimeEvents: detectDowntime(assetTag, readings, p.maxGap())}
+	return DailyResult{
+		Summary:        sum,
+		DowntimeEvents: detectDowntime(assetTag, readings, p.maxGap()),
+		StateIntervals: detectStateIntervals(assetTag, readings, p.maxGap()),
+	}
 }
 
 // detectDowntime emits one event per contiguous run of "down" readings.
@@ -198,4 +202,45 @@ func positiveDelta(readings []Reading, pick func(Reading) *int64) int64 {
 		prev = cur
 	}
 	return total
+}
+
+// detectStateIntervals walks the same runs detectDowntime does, for every
+// state except two.
+//
+// `down` is left out because the downtime event already carries it: both
+// reach iag-production, and emitting a stoppage twice would have it recorded
+// twice. `unknown` is left out because it means no data — a minute we cannot
+// name is not a minute the machine spent doing something, and inventing a
+// state for it would put a guess where a gap belongs.
+//
+// Bounds match detectDowntime exactly, so a stop and the running time either
+// side of it meet rather than overlap or leave a hole.
+func detectStateIntervals(assetTag string, readings []Reading, maxGap time.Duration) []StateInterval {
+	var out []StateInterval
+	i := 0
+	for i < len(readings) {
+		state := NormalizeState(readings[i].State)
+		if state == StateDown || state == StateUnknown {
+			i++
+			continue
+		}
+		start := readings[i].TS
+		j := i
+		for j < len(readings) && NormalizeState(readings[j].State) == state {
+			j++
+		}
+		var end time.Time
+		if j < len(readings) {
+			end = readings[j].TS
+		} else {
+			end = readings[j-1].TS.Add(maxGap)
+		}
+		if end.Sub(start).Minutes() >= 1 {
+			out = append(out, StateInterval{
+				AssetTag: assetTag, State: state, StartedAt: start, EndedAt: end,
+			})
+		}
+		i = j
+	}
+	return out
 }

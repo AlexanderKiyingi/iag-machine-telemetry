@@ -44,7 +44,7 @@ func main() {
 	}
 	slog.Info("aggregating", "from", from.Format("2006-01-02"), "to", to.Format("2006-01-02"), "machineDays", len(pairs))
 
-	var rolled, downtimeWritten int
+	var rolled, downtimeWritten, statesAnnounced int
 	for _, md := range pairs {
 		readings, err := store.ReadingsForDay(ctx, md.AssetTag, md.Day)
 		if err != nil {
@@ -62,8 +62,13 @@ func main() {
 		} else {
 			downtimeWritten += n
 		}
+		if n, err := store.AnnounceStateIntervals(ctx, res.StateIntervals); err != nil {
+			slog.Warn("announce state", "assetTag", md.AssetTag, "day", md.Day, "err", err)
+		} else {
+			statesAnnounced += n
+		}
 	}
-	slog.Info("aggregation complete", "dailyRows", rolled, "downtimeEvents", downtimeWritten)
+	slog.Info("aggregation complete", "dailyRows", rolled, "downtimeEvents", downtimeWritten, "stateIntervals", statesAnnounced)
 
 	// Retention defaults to the policy the platform already declares rather
 	// than to nothing.
