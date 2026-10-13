@@ -118,4 +118,21 @@ var (
 	sqlEnqueueEvent = fmt.Sprintf(`
         INSERT INTO %s (kafka_topic, event_type, event_key, payload)
         VALUES ($1, $2, $3, $4::jsonb)`, OutboxTable)
+
+	// State intervals are announced once each. The aggregator re-runs over a
+	// trailing window and would otherwise re-send every interval of every
+	// day it covers, so the outbox is checked for an identical announcement
+	// before another is written. Keyed on what identifies the interval —
+	// machine, state and start — rather than on a surrogate id, because the
+	// aggregator recomputes intervals rather than remembering them.
+	sqlEnqueueStateOnce = fmt.Sprintf(`
+        INSERT INTO %s (kafka_topic, event_type, event_key, payload)
+        SELECT $1, $2, $3, $4::jsonb
+         WHERE NOT EXISTS (
+               SELECT 1 FROM %s
+                WHERE event_type = $2
+                  AND event_key  = $3
+                  AND payload->>'state'      = $4::jsonb->>'state'
+                  AND payload->>'started_at' = $4::jsonb->>'started_at')`,
+		OutboxTable, OutboxTable)
 )

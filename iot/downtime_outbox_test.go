@@ -176,3 +176,63 @@ func TestAnOngoingStoppageIsAnnouncedOnce(t *testing.T) {
 		t.Errorf("state = %q, want open — the stop has not finished", state)
 	}
 }
+
+// State intervals are announced once each.
+//
+// The aggregator recomputes intervals over a trailing window rather than
+// remembering which it sent, so the same interval is offered on every run.
+// Re-announcing would have iag-production write the same machine-level
+// interval repeatedly.
+func TestAStateIntervalIsAnnouncedOnce(t *testing.T) {
+	s, ctx := outboxTestStore(t)
+	tag := "MCH-" + time.Now().Format("150405.000000") + "s"
+	start := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Second)
+	intervals := []StateInterval{
+		{AssetTag: tag, State: StateRunning, StartedAt: start, EndedAt: start.Add(2 * time.Hour)},
+		{AssetTag: tag, State: StateIdle, StartedAt: start.Add(2 * time.Hour), EndedAt: start.Add(3 * time.Hour)},
+	}
+
+	n, err := s.AnnounceStateIntervals(ctx, intervals)
+	if err != nil {
+		t.Fatalf("announce: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("announced %d, want 2", n)
+	}
+	again, err := s.AnnounceStateIntervals(ctx, intervals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != 0 {
+		t.Errorf("the second pass announced %d more, want 0", again)
+	}
+
+	var total int
+	if err := s.op().QueryRow(ctx,
+		`SELECT count(*) FROM mes_event_outbox WHERE event_key = $1 AND event_type = $2`,
+		tag, EventMachineState).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Errorf("%d events in the outbox after two passes, want 2", total)
+	}
+
+	// The payload carries what production needs to write an interval.
+	var state, from, to, source, topic string
+	if err := s.op().QueryRow(ctx, `
+		SELECT payload->>'state', payload->>'started_at', payload->>'ended_at',
+		       payload->>'source', kafka_topic
+		  FROM mes_event_outbox
+		 WHERE event_key = $1 AND event_type = $2 AND payload->>'state' = 'running'`,
+		tag, EventMachineState).Scan(&state, &from, &to, &source, &topic); err != nil {
+		t.Fatal(err)
+	}
+	if source != "sensor" || topic != TopicOperations {
+		t.Errorf("source=%q topic=%q", source, topic)
+	}
+	for _, ts := range []string{from, to} {
+		if _, err := time.Parse(time.RFC3339, ts); err != nil {
+			t.Errorf("timestamp %q is not RFC3339", ts)
+		}
+	}
+}

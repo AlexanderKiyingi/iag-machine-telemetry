@@ -29,6 +29,10 @@ const TopicOperations = "iag.operations"
 const (
 	EventDowntimeStarted = "mes.downtime.started"
 	EventDowntimeEnded   = "mes.downtime.ended"
+	// One interval of a machine's own state, for iag-production's machine
+	// timeline (018). Downtime alone told it when a machine stopped and never
+	// when it ran.
+	EventMachineState = "mes.machine.state"
 )
 
 // DevicesTable is the operational IoT device registry (serial → asset binding,
